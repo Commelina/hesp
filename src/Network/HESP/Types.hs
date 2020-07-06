@@ -59,7 +59,10 @@ data Message = SimpleString ByteString
              | Array (Vector Message)
              | Push ByteString (Vector Message)
              | Map (Map Message Message)
-  deriving (Eq, Ord, Show, Generic, NFData)
+  deriving (Eq, Ord, Generic, NFData)
+
+instance Show Message where
+  show _ = ""
 
 -- | Simple strings can not contain the @CR@ nor the @LF@ characters inside.
 mkSimpleString :: ByteString -> Either ProtocolException Message
