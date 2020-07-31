@@ -55,6 +55,8 @@ import           Network.HESP.Protocol          (deserializeWithMaybe,
                                                  serialize)
 import qualified Network.HESP.Types             as T
 
+import           Data.IORef
+
 -------------------------------------------------------------------------------
 
 runTCPServer :: NS.HostName
@@ -82,12 +84,13 @@ runTCPServer' host port setOpts release server = do
 
 -- | Generalized version of 'runTCPServer'.
 runTCPServerG :: (MonadBaseControl IO m, MonadIO m)
-              => NS.HostName
+              => IORef Int
+              -> NS.HostName
               -> NS.ServiceName
               -> ((Socket, SockAddr) -> m ())
               -> m a
-runTCPServerG host port =
-  runTCPServerG' host port setDefaultServerSO (liftIO . clean)
+runTCPServerG ref host port =
+  runTCPServerG' ref host port setDefaultServerSO (liftIO . clean)
   where
     clean (Left e, lsock)  = err e >> gracefulClose lsock
     clean (Right _, lsock) = gracefulClose lsock
@@ -97,15 +100,16 @@ runTCPServerG host port =
     x = "Network.HESP.TCP.runTCPServerG: Synchronous exception happened: "
 
 runTCPServerG' :: (MonadBaseControl IO m, MonadIO m)
-               => NS.HostName
+               => IORef Int
+               -> NS.HostName
                -> NS.ServiceName
                -> (Socket -> IO ())   -- ^ set socket options
                -> ((Either SomeException (), Socket) -> m ())
                -> ((Socket, SockAddr) -> m ())
                -> m a
-runTCPServerG' host port setOpts release server = do
+runTCPServerG' ref host port setOpts release server = do
   addr <- resolveServer host port
-  gbracket (openServer addr setOpts) close (acceptConc' server release)
+  gbracket (openServer addr setOpts) close (\sock -> acceptConc' server release sock ref)
 
 connect :: (MonadIO m, Ex.MonadMask m)
         => NS.HostName      -- ^ Server hostname or IP address.
@@ -181,10 +185,14 @@ acceptConc' :: (MonadBaseControl IO m, MonadIO m)
             => ((Socket, SockAddr) -> m ())
             -> ((Either SomeException (), Socket) -> m ())
             -> Socket
+            -> IORef Int
             -> m a
-acceptConc' server release sock = forever $ do
+acceptConc' server release sock ref = forever $ do
   (conn, peer) <- liftIO $ NS.accept sock
-  void $ L.forkFinally (server (conn, peer)) (\r -> release (r, conn))
+  core <- liftIO $ readIORef ref
+  void $ L.forkOn core (server (conn, peer))
+  liftIO $ modifyIORef ref (+ 1)
+  --void $ L.forkFinally (server (conn, peer)) (\r -> release (r, conn))
 
 resolveServer :: MonadIO m => NS.HostName -> NS.ServiceName -> m NS.AddrInfo
 resolveServer host port =
